@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: salary_tracker_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: payroll
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5437:5432"
+    volumes:
+      - salary_tracker_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d payroll"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - salary_tracker_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: salary_tracker_api
+    restart: unless-stopped
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./backend:/app
+    environment:
+      DATABASE_URL: postgresql://user:password@postgres:5432/payroll
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - salary_tracker_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: salary_tracker_frontend
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - salary_tracker_network
+
+volumes:
+  salary_tracker_data:
+
+networks:
+  salary_tracker_network:

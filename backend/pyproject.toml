@@ -1,0 +1,13 @@
+[project]
+name = "payroll-backend"
+version = "0.1.0"
+description = "Minimal payroll time tracking backend"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.116.1",
+    "sqlalchemy[asyncio]>=2.0.42",
+    "asyncpg>=0.29.0",
+    "pendulum>=3.0.0",
+    "pydantic-settings>=2.4.0",
+    "requests>=2.31.0",
+]
