@@ -4,21 +4,14 @@ Minimal payroll time tracking system with FastAPI + Vue 3.
 
 ## Quick Start
 
-1. **Start Database**
-   ```bash
-   docker-compose up -d
+1. **Auto Setup (Recommended)**
+   ```powershell
+   .\setup.ps1
    ```
 
-2. **Start Backend** 
+2. **Manual Setup**
    ```bash
-   cd backend
-   uv run python main.py
-   ```
-
-3. **Start Frontend**
-   ```bash
-   cd frontend  
-   pnpm dev
+   docker-compose up -d --build
    ```
 
 ## Usage
@@ -35,9 +28,9 @@ Minimal payroll time tracking system with FastAPI + Vue 3.
 
 ## URLs
 
-- Frontend: http://localhost:5173
-- Backend API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
+- Frontend: http://localhost:3002
+- Backend API: http://localhost:8002
+- API Docs: http://localhost:8002/docs
 
 ## Tech Stack
 

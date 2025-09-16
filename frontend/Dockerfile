@@ -13,5 +13,6 @@ COPY . .
 
 EXPOSE 3000
 
-# Run development server with host binding
-CMD ["pnpm", "run", "dev", "--host", "0.0.0.0", "--port", "3000"]
+# Build for production and serve
+RUN pnpm run build
+CMD ["pnpm", "run", "preview"]

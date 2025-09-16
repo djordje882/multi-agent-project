@@ -35,6 +35,14 @@ foreach ($port in $ports) {
     }
 }
 
+# Setup environment file
+if (-not (Test-Path ".env")) {
+    Write-Host "Creating .env file from template..." -ForegroundColor Cyan
+    Copy-Item ".env.example" ".env"
+    Write-Host "Created .env with default credentials (user/password)" -ForegroundColor Green
+    Write-Host "You can modify .env if needed before running docker-compose" -ForegroundColor Yellow
+}
+
 # Start application
 Write-Host "Starting containers..." -ForegroundColor Cyan
 docker compose down 2>$null
