@@ -60,10 +60,7 @@ do {
     $health = docker inspect --format='{{.State.Health.Status}}' salary_tracker_db 2>$null
 } while ($health -ne "healthy")
 
-# Populate data
-Write-Host "Adding employees..." -ForegroundColor Cyan
-Start-Sleep 5
-docker exec -e API_BASE=http://localhost:8000/api salary_tracker_api python add_workers.py
+# Database ready - construction roles automatically populated
 
 # Success
 Write-Host "`nSUCCESS! Application ready at:" -ForegroundColor Green

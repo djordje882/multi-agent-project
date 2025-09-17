@@ -142,21 +142,7 @@ async def init_database():
             """)
 
 async def init_default_data():
-    sites = [
-        ("DGDI-Libreville", "Libreville, Gabon"),
-        ("DGDI-Oyem", "Oyem, Gabon"), 
-        ("DGDI-Meyo Kye", "Meyo Kye, Gabon"),
-        ("BDT-Libreville", "Libreville, Gabon"),
-        ("Cobac-Libreville", "Libreville, Gabon")
-    ]
-    
-    existing_sites = await get_all_construction_sites()
-    existing_names = {site['name'] for site in existing_sites}
-    
-    for name, address in sites:
-        if name not in existing_names:
-            await create_construction_site(name, address)
-    
+    """Initialize only essential construction industry roles"""
     roles = [
         "Guichetier", "Gardien", "Chauffeur", "Magasinier", "Coursier",
         "Chef de chantier", "Chef d'équipe-Maçon", "Chef d'équipe-Charpentier", 
