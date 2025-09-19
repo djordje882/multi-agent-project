@@ -64,13 +64,31 @@ class PayrollResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    await db.db_manager.create_pool()
-    await db.init_database()
-    await db.init_default_data()
+    try:
+        print("Starting database initialization...")
+        await db.db_manager.create_pool()
+        print("Database pool created successfully")
+        
+        await db.init_database()
+        print("Database schema initialized successfully")
+        
+        await db.init_default_data()
+        print("Default data initialized successfully")
+        
+        print("Database initialization completed successfully")
+    except Exception as e:
+        print(f"Database initialization failed: {e}")
+        if db.db_manager.pool:
+            await db.db_manager.close_pool()
+        raise e
     
     yield
     # Shutdown
-    await db.db_manager.close_pool()
+    try:
+        await db.db_manager.close_pool()
+        print("Database pool closed successfully")
+    except Exception as e:
+        print(f"Error closing database pool: {e}")
 
 app = FastAPI(
     title="Payroll Time Tracker",

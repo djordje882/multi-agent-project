@@ -143,19 +143,33 @@ async def init_database():
 
 async def init_default_data():
     """Initialize only essential construction industry roles"""
-    roles = [
-        "Guichetier", "Gardien", "Chauffeur", "Magasinier", "Coursier",
-        "Chef de chantier", "Chef d'équipe-Maçon", "Chef d'équipe-Charpentier", 
-        "Chef d'équipe-Ferrailleur", "Maçon", "Aide Maçon", "Charpentier",
-        "Aide Charpentier", "Ferrailleur", "Aide Ferrailleur", "Betonier", "Aide"
-    ]
-    
-    existing_roles = await get_all_roles()
-    existing_role_names = {role['name'] for role in existing_roles}
-    
-    for role_name in roles:
-        if role_name not in existing_role_names:
-            await create_role(role_name)
+    try:
+        roles = [
+            "Guichetier", "Gardien", "Chauffeur", "Magasinier", "Coursier",
+            "Chef de chantier", "Chef d'équipe-Maçon", "Chef d'équipe-Charpentier", 
+            "Chef d'équipe-Ferrailleur", "Maçon", "Aide Maçon", "Charpentier",
+            "Aide Charpentier", "Ferrailleur", "Aide Ferrailleur", "Betonier", "Aide"
+        ]
+        
+        print(f"Initializing default roles: {len(roles)} roles to process")
+        
+        existing_roles = await get_all_roles()
+        existing_role_names = {role['name'] for role in existing_roles}
+        
+        print(f"Found {len(existing_role_names)} existing roles")
+        
+        roles_created = 0
+        for role_name in roles:
+            if role_name not in existing_role_names:
+                await create_role(role_name)
+                roles_created += 1
+                print(f"Created role: {role_name}")
+        
+        print(f"Default data initialization completed. Created {roles_created} new roles")
+        
+    except Exception as e:
+        print(f"Error initializing default data: {e}")
+        raise e
 
 async def get_time_entries_for_period(start_date: pendulum.DateTime, end_date: pendulum.DateTime) -> list:
     """Get time entries for date range with proper timezone handling"""
