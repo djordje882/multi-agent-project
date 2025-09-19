@@ -93,7 +93,7 @@ class PayrollCalculator:
             overtime_hours * hourly_rate * Decimal('1.15') +
             weekend_hours * hourly_rate * Decimal('1.5') +
             holiday_hours * hourly_rate * Decimal('2.0') +
-            sick_hours * hourly_rate * Decimal('0.65') +
+            sick_hours * hourly_rate * Decimal('1.0') +
             vacation_hours * hourly_rate
         )
     
