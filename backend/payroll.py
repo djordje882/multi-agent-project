@@ -1,6 +1,6 @@
 import pendulum
 from decimal import Decimal
-from typing import Dict, List, Tuple
+from typing import Optional
 from dataclasses import dataclass
 from database import get_time_entries_for_period, get_current_hourly_rate
 
@@ -32,8 +32,11 @@ class PayrollCalculator:
         return date.weekday() == 6
     
     @staticmethod
-    def calculate_daily_hours(entries: List[Dict]) -> Decimal:
+    def calculate_daily_hours(entries: list[dict], current_time: pendulum.DateTime = None) -> Decimal:
         """Calculate work hours for a single day from punch entries"""
+        if current_time is None:
+            current_time = pendulum.now('UTC')
+            
         total_seconds = Decimal('0')
         in_time = None
         
@@ -45,18 +48,18 @@ class PayrollCalculator:
                 total_seconds += Decimal(str(duration.total_seconds()))
                 in_time = None
         
-        # If still clocked in, calculate until now
+        # If still clocked in, calculate until current_time
         if in_time:
-            duration = pendulum.now('UTC') - in_time
+            duration = current_time - in_time
             total_seconds += Decimal(str(duration.total_seconds()))
         
         return total_seconds / Decimal('3600')  # Convert to hours
     
     @staticmethod
-    def get_15_day_period_bounds(reference_date: pendulum.Date = None) -> Tuple[pendulum.DateTime, pendulum.DateTime]:
+    def get_15_day_period_bounds(reference_date: pendulum.Date = None) -> tuple[pendulum.DateTime, pendulum.DateTime]:
         """Get 15-day period boundaries (1st-15th, 16th-end of month)"""
         if reference_date is None:
-            reference_date = pendulum.today('UTC').date()
+            reference_date = pendulum.now('UTC').date()
         
         if reference_date.day <= 15:
             start_date = pendulum.datetime(reference_date.year, reference_date.month, 1, tz='UTC')
@@ -67,6 +70,32 @@ class PayrollCalculator:
             end_date = pendulum.datetime(reference_date.year, reference_date.month, last_day, 23, 59, 59, tz='UTC')
         
         return (start_date, end_date)
+    
+    @classmethod
+    def _group_entries_by_date(cls, entries: list[dict]) -> dict[str, list]:
+        """Group time entries by date"""
+        daily_entries: dict[str, list] = {}
+        for entry in entries:
+            date_key = entry['punch_time'].date().isoformat()
+            if date_key not in daily_entries:
+                daily_entries[date_key] = []
+            daily_entries[date_key].append(entry)
+        return daily_entries
+    
+    @classmethod
+    def _calculate_gross_pay(cls, regular_hours: Decimal, overtime_hours: Decimal, 
+                           weekend_hours: Decimal, holiday_hours: Decimal, 
+                           sick_hours: Decimal, vacation_hours: Decimal, 
+                           hourly_rate: Decimal) -> Decimal:
+        """Calculate gross pay from hours breakdown"""
+        return (
+            regular_hours * hourly_rate +
+            overtime_hours * hourly_rate * Decimal('1.15') +
+            weekend_hours * hourly_rate * Decimal('1.5') +
+            holiday_hours * hourly_rate * Decimal('2.0') +
+            sick_hours * hourly_rate * Decimal('0.65') +
+            vacation_hours * hourly_rate
+        )
     
     @classmethod
     async def calculate_period_pay(cls, 
@@ -82,12 +111,7 @@ class PayrollCalculator:
         hourly_rate = await get_current_hourly_rate()
         
         # Group entries by date
-        daily_entries: Dict[str, List] = {}
-        for entry in entries:
-            date_key = entry['punch_time'].date().isoformat()
-            if date_key not in daily_entries:
-                daily_entries[date_key] = []
-            daily_entries[date_key].append(entry)
+        daily_entries = cls._group_entries_by_date(entries)
         
         # Initialize totals
         regular_hours = Decimal('0')
@@ -137,15 +161,8 @@ class PayrollCalculator:
         
         # Calculate total hours and gross pay
         total_hours = regular_hours + overtime_hours + weekend_hours + holiday_hours + sick_hours + vacation_hours
-        
-        gross_pay = (
-            regular_hours * hourly_rate +
-            overtime_hours * hourly_rate * Decimal('1.15') +
-            weekend_hours * hourly_rate * Decimal('1.5') +
-            holiday_hours * hourly_rate * Decimal('2.0') +
-            sick_hours * hourly_rate * Decimal('0.65') +
-            vacation_hours * hourly_rate
-        )
+        gross_pay = cls._calculate_gross_pay(regular_hours, overtime_hours, weekend_hours, 
+                                           holiday_hours, sick_hours, vacation_hours, hourly_rate)
         
         return PayrollCalculation(
             regular_hours=regular_hours,
@@ -162,11 +179,14 @@ class PayrollCalculator:
         )
     
     @classmethod
-    async def get_today_hours(cls) -> Dict:
+    async def get_today_hours(cls, current_time: pendulum.DateTime = None) -> dict:
         """Get today's work hours and status"""
-        today = pendulum.today('UTC')
-        start_of_day = today.start_of('day')
-        end_of_day = today.end_of('day')
+        if current_time is None:
+            current_time = pendulum.now('UTC')
+            
+        today = current_time.date()
+        start_of_day = pendulum.datetime(today.year, today.month, today.day, tz='UTC')
+        end_of_day = start_of_day.end_of('day')
         
         entries = await get_time_entries_for_period(start_of_day, end_of_day)
         
@@ -182,7 +202,7 @@ class PayrollCalculator:
         
         # Calculate total hours for today
         punch_entries = [e for e in entries if e['entry_type'] in ['in', 'out']]
-        total_hours = cls.calculate_daily_hours(punch_entries)
+        total_hours = cls.calculate_daily_hours(punch_entries, current_time)
         
         return {
             'total_hours': float(total_hours),

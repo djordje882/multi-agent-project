@@ -3,13 +3,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from contextlib import asynccontextmanager
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Callable, Any
 import pendulum
 import asyncpg
+import logging
 from functools import wraps
 
 import database as db
 from payroll import PayrollCalculator
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class PunchRequest(BaseModel):
     entry_type: str = Field(..., pattern="^(in|out|sick|vacation)$")
@@ -65,19 +70,19 @@ class PayrollResponse(BaseModel):
 async def lifespan(app: FastAPI):
     # Startup
     try:
-        print("Starting database initialization...")
+        logger.info("Starting database initialization...")
         await db.db_manager.create_pool()
-        print("Database pool created successfully")
+        logger.info("Database pool created successfully")
         
         await db.init_database()
-        print("Database schema initialized successfully")
+        logger.info("Database schema initialized successfully")
         
         await db.init_default_data()
-        print("Default data initialized successfully")
+        logger.info("Default data initialized successfully")
         
-        print("Database initialization completed successfully")
+        logger.info("Database initialization completed successfully")
     except Exception as e:
-        print(f"Database initialization failed: {e}")
+        logger.error(f"Database initialization failed: {e}")
         if db.db_manager.pool:
             await db.db_manager.close_pool()
         raise e
@@ -86,9 +91,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     try:
         await db.db_manager.close_pool()
-        print("Database pool closed successfully")
+        logger.info("Database pool closed successfully")
     except Exception as e:
-        print(f"Error closing database pool: {e}")
+        logger.error(f"Error closing database pool: {e}")
 
 app = FastAPI(
     title="Payroll Time Tracker",
@@ -105,21 +110,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def prepare_employee_data(employee: EmployeeRequest) -> dict:
+def prepare_employee_data(employee: EmployeeRequest) -> dict[str, Any]:
     """Convert EmployeeRequest to dict with proper Decimal conversion"""
     data = employee.dict()
     data["hourly_rate"] = Decimal(str(employee.hourly_rate))
     return data
 
-def handle_errors(error_prefix: str):
+def handle_errors(error_prefix: str) -> Callable:
     """Decorator to handle common exception patterns"""
-    def decorator(func):
+    def decorator(func: Callable) -> Callable:
         @wraps(func)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return await func(*args, **kwargs)
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"{error_prefix}: {str(e)}")
+            except asyncpg.PostgresError as e:
+                raise HTTPException(status_code=500, detail=f"{error_prefix}: Database error - {str(e)}")
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"{error_prefix}: Invalid input - {str(e)}")
         return wrapper
     return decorator
 
@@ -145,7 +152,7 @@ async def punch_clock(request: PunchRequest):
     
     except asyncpg.PostgresError as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-    except Exception as e:
+    except (ValueError, pendulum.parsing.ParserError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid request: {str(e)}")
 
 @app.get("/api/hours/today", response_model=TodayHoursResponse)
@@ -161,8 +168,10 @@ async def get_today_hours():
             entry_count=hours_data['entry_count']
         )
     
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error retrieving hours: {str(e)}")
+    except asyncpg.PostgresError as e:
+        raise HTTPException(status_code=500, detail=f"Database error retrieving hours: {str(e)}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date/time parameters: {str(e)}")
 
 @app.get("/api/payroll/calculate", response_model=PayrollResponse)
 async def calculate_payroll(
@@ -199,11 +208,13 @@ async def calculate_payroll(
     
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {str(e)}")
-    except Exception as e:
+    except asyncpg.PostgresError as e:
+        raise HTTPException(status_code=500, detail=f"Database error during calculation: {str(e)}")
+    except (Decimal.InvalidOperation, ArithmeticError) as e:
         raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
 
 @app.put("/api/settings/rate")
-async def update_rate(request: RateUpdateRequest):
+async def update_rate(request: RateUpdateRequest) -> dict[str, Any]:
     try:
         rate = Decimal(str(request.hourly_rate))
         success = await db.update_hourly_rate(rate)
@@ -213,17 +224,19 @@ async def update_rate(request: RateUpdateRequest):
         else:
             raise HTTPException(status_code=500, detail="Failed to update rate")
     
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error updating rate: {str(e)}")
+    except asyncpg.PostgresError as e:
+        raise HTTPException(status_code=500, detail=f"Database error updating rate: {str(e)}")
+    except (Decimal.InvalidOperation, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid rate value: {str(e)}")
 
 @app.get("/api/settings/rate")
-async def get_current_rate():
+async def get_current_rate() -> dict[str, float]:
     try:
         rate = await db.get_current_hourly_rate()
         return {"hourly_rate": float(rate)}
     
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error retrieving rate: {str(e)}")
+    except asyncpg.PostgresError as e:
+        raise HTTPException(status_code=500, detail=f"Database error retrieving rate: {str(e)}")
 
 @app.get("/api/calendar")
 async def get_calendar_data(
@@ -275,7 +288,7 @@ async def get_employees():
 
 @app.post("/api/employees")
 @handle_errors("Error creating employee")
-async def create_employee(employee: EmployeeRequest):
+async def create_employee(employee: EmployeeRequest) -> dict[str, Any]:
     data = prepare_employee_data(employee)
     employee_id = await db.create_employee(**data)
     return {"success": True, "employee_id": employee_id, "message": "Employee created successfully"}
@@ -362,7 +375,7 @@ async def get_roles():
     return await db.get_all_roles()
 
 @app.post("/api/roles")
-async def create_role(role: RoleRequest):
+async def create_role(role: RoleRequest) -> dict[str, Any]:
     try:
         role_id = await db.create_role(**role.dict())
         return {"success": True, "role_id": role_id, "message": "Role created successfully"}
@@ -393,7 +406,7 @@ async def delete_role(role_id: int):
 
 # Health check endpoint
 @app.get("/health")
-async def health_check():
+async def health_check() -> dict[str, str]:
     """Simple health check"""
     return {"status": "healthy", "timestamp": pendulum.now('UTC').to_iso8601_string()}
 

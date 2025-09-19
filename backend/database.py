@@ -1,10 +1,14 @@
 import asyncpg
 import pendulum
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from decimal import Decimal
 from datetime import datetime
 import os
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5437/payroll")
 
@@ -38,7 +42,7 @@ class DatabaseManager:
         async with self.pool.acquire() as conn:
             try:
                 yield conn
-            except Exception:
+            except asyncpg.PostgresError:
                 raise
 
 db_manager = DatabaseManager(DATABASE_URL)
@@ -68,78 +72,92 @@ async def _simple_delete(table: str, entity_id: int) -> bool:
         result = await conn.execute(f"DELETE FROM {table} WHERE id = $1", entity_id)
         return result == "DELETE 1"
 
+async def _create_core_tables(conn: asyncpg.Connection) -> None:
+    """Create core business tables"""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS construction_sites (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(200) NOT NULL,
+            address VARCHAR(500) NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS roles (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100) NOT NULL UNIQUE,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+
+async def _create_dependent_tables(conn: asyncpg.Connection) -> None:
+    """Create tables that depend on core tables"""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS employees (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            last_name VARCHAR(100) NOT NULL,
+            role_id INTEGER REFERENCES roles(id),
+            construction_site_id INTEGER REFERENCES construction_sites(id),
+            hourly_rate DECIMAL(10,2) NOT NULL,
+            status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+            fire_date DATE,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+
+async def _create_time_tracking_tables(conn: asyncpg.Connection) -> None:
+    """Create time tracking and settings tables"""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS time_entries (
+            id SERIAL PRIMARY KEY,
+            employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
+            punch_time TIMESTAMPTZ NOT NULL,
+            entry_type VARCHAR(10) NOT NULL CHECK (entry_type IN ('in', 'out', 'sick', 'vacation')),
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_settings (
+            id INTEGER PRIMARY KEY DEFAULT 1,
+            hourly_rate DECIMAL(10,2) NOT NULL DEFAULT 15.00,
+            timezone VARCHAR(50) DEFAULT 'UTC',
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+
+async def _create_indexes(conn: asyncpg.Connection) -> None:
+    """Create database indexes for performance"""
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_time_entries_punch_time ON time_entries(punch_time)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_time_entries_employee ON time_entries(employee_id)
+    """)
+
+async def _insert_default_settings(conn: asyncpg.Connection) -> None:
+    """Insert default application settings"""
+    await conn.execute("""
+        INSERT INTO user_settings (hourly_rate) 
+        VALUES (15.00) 
+        ON CONFLICT (id) DO NOTHING
+    """)
+
 async def init_database():
     """Initialize database schema with clean, final state"""
     async with db_manager.get_connection() as conn:
         async with conn.transaction():
             # Create all tables in correct dependency order
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS construction_sites (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(200) NOT NULL,
-                    address VARCHAR(500) NOT NULL,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS roles (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(100) NOT NULL UNIQUE,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS employees (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(100) NOT NULL,
-                    last_name VARCHAR(100) NOT NULL,
-                    role_id INTEGER REFERENCES roles(id),
-                    construction_site_id INTEGER REFERENCES construction_sites(id),
-                    hourly_rate DECIMAL(10,2) NOT NULL,
-                    status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
-                    fire_date DATE,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS time_entries (
-                    id SERIAL PRIMARY KEY,
-                    employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
-                    punch_time TIMESTAMPTZ NOT NULL,
-                    entry_type VARCHAR(10) NOT NULL CHECK (entry_type IN ('in', 'out', 'sick', 'vacation')),
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS user_settings (
-                    id INTEGER PRIMARY KEY DEFAULT 1,
-                    hourly_rate DECIMAL(10,2) NOT NULL DEFAULT 15.00,
-                    timezone VARCHAR(50) DEFAULT 'UTC',
-                    updated_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            
-            # Create indexes
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_time_entries_punch_time ON time_entries(punch_time)
-            """)
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_time_entries_employee ON time_entries(employee_id)
-            """)
-            
-            # Insert default settings
-            await conn.execute("""
-                INSERT INTO user_settings (hourly_rate) 
-                VALUES (15.00) 
-                ON CONFLICT (id) DO NOTHING
-            """)
+            await _create_core_tables(conn)
+            await _create_dependent_tables(conn)
+            await _create_time_tracking_tables(conn)
+            await _create_indexes(conn)
+            await _insert_default_settings(conn)
 
 async def init_default_data():
     """Initialize only essential construction industry roles"""
@@ -151,24 +169,24 @@ async def init_default_data():
             "Aide Charpentier", "Ferrailleur", "Aide Ferrailleur", "Betonier", "Aide"
         ]
         
-        print(f"Initializing default roles: {len(roles)} roles to process")
+        logger.info(f"Initializing default roles: {len(roles)} roles to process")
         
         existing_roles = await get_all_roles()
         existing_role_names = {role['name'] for role in existing_roles}
         
-        print(f"Found {len(existing_role_names)} existing roles")
+        logger.debug(f"Found {len(existing_role_names)} existing roles")
         
         roles_created = 0
         for role_name in roles:
             if role_name not in existing_role_names:
                 await create_role(role_name)
                 roles_created += 1
-                print(f"Created role: {role_name}")
+                logger.debug(f"Created role: {role_name}")
         
-        print(f"Default data initialization completed. Created {roles_created} new roles")
+        logger.info(f"Default data initialization completed. Created {roles_created} new roles")
         
-    except Exception as e:
-        print(f"Error initializing default data: {e}")
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error initializing default data: {e}")
         raise e
 
 async def get_time_entries_for_period(start_date: pendulum.DateTime, end_date: pendulum.DateTime) -> list:
